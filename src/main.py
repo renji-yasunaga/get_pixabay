@@ -2,9 +2,8 @@
 from inspect import trace
 from selenium import webdriver
 from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support.ui import Select
-from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.keys import Keys
 from time import sleep
 import requests
 import configparser
@@ -12,6 +11,8 @@ import log
 import openpyxl
 import traceback
 import os
+from PIL import Image
+import io
 
 
 
@@ -20,7 +21,7 @@ import os
 config = configparser.ConfigParser()
 config.read(R"setting.ini",encoding="utf-8")
 
-log_path = os.path.abspath('src/log/debug.log')
+log_path = os.path.abspath('log')
 if not os.path.exists(log_path):
     os.mkdir(log_path)
 logger = log.Logger(__name__)
@@ -59,7 +60,8 @@ def get_search_word(input_excel_path,search_word_cell):
     wb = openpyxl.load_workbook(input_excel_path)
     ws = wb.worksheets[0]
 
-    search_word = ws.cell[search_word_cell]
+    search_word = ws[search_word_cell].value
+    logger.debug("検索ワード : " + search_word)
 
 
     logger.debug("------Excelから検索ワード取得処理開始")
@@ -86,6 +88,9 @@ def create_search_querystring(search_colors,is_grayscale):
     for search_color in search_colors:
 
         query_string += "colors=" + search_color +"&"
+    
+    if is_grayscale == "1":
+        query_string += "colors=grayscale&"
         
     query_string = query_string[:-1]
     logger.debug("生成されたQueryString : " + query_string)
@@ -93,6 +98,37 @@ def create_search_querystring(search_colors,is_grayscale):
     logger.debug("-------検索用QueryString生成完了")
 
     return query_string
+
+def check_image(browser):
+    """画像が保存対象かチェックする
+        横長画像か？
+    Args:
+        browser ([type]): [description]
+
+    Returns:
+        [type]: [description]
+    """
+    logger.debug("-------画像が横長かチェック処理開始")
+
+    res = True
+    image_dom = browser.find_element_by_id("media_container")
+    img_url = image_dom.find_element_by_tag_name("img").get_attribute("src")
+
+    img = Image.open(io.BytesIO(requests.get(img_url).content))
+    width,height = img.size
+
+    logger.debug("画像幅 : " + str(width))
+    logger.debug("画像高さ : " + str(height))
+
+    if width < height:
+        res = False
+
+    
+    logger.debug("チェック結果 : " + str(res))
+
+    logger.debug("-------画像が横長かチェック処理完了")
+
+    return res
 
 
 
@@ -107,12 +143,12 @@ def save_image(browser,output_path,search_word):
 
     logger.debug("-------画像保存処理開始")
     image_dom = browser.find_element_by_id("media_container")
-    save_folder_path = output_path + search_word
+    save_folder_path = output_path + "\\" + search_word
 
     if not os.path.exists(save_folder_path):
         os.makedirs(save_folder_path)
 
-    img_url = image_dom.find_element_by_tag_name.get_attribute("img").get_attribute("src")
+    img_url = image_dom.find_element_by_tag_name("img").get_attribute("src")
     file_name = img_url.split("/")[-1]
 
     logger.debug("画像URL : " + img_url)
@@ -140,6 +176,7 @@ if __name__ == "__main__":
     search_colors = config.get("searchParameter","colors")
     is_grayscale = config.get("searchParameter","is_grayscale")
     output_folder_path = os.path.abspath(config.get("path","outpu_folder"))
+    get_count = config.get("searchParameter","get_count")
 
 
     logger.debug("---------------------------------------------")
@@ -150,6 +187,7 @@ if __name__ == "__main__":
     logger.debug("検索ワードセル : " + search_word_cell)
     logger.debug("検索色 : " + search_colors)
     logger.debug("グレースケール : " + is_grayscale)
+    logger.debug("取得件数 : " + get_count)
     logger.debug("---------------------------------------------")
 
 
@@ -162,31 +200,73 @@ if __name__ == "__main__":
         
         query_string = create_search_querystring(search_colors,is_grayscale)
 
-        # 
+        # 検索ページへ遷移
         browser.get(pixabay_base_url + search_word + query_string)
         wait_browser(browser)
 
         logger.debug("pixabayに接続完了")
 
-        
-        # 画像保存のために新しいタブで各画像ページを開く
-        search_result_dom = browser.find_element_by_class_name("search_results")
-        images_dom = search_result_dom.find_elements_by_class_name("item")
-        for image_dom in images_dom:
-            page_url = image_dom.get_attribute("href")
+
+        index = 0
+        page = 1
+
+        while index < int(get_count):
+
+            # 下までスクロール
+            # browser.find_element_by_tag_name('body').click()
+            for i in range(15):
+                browser.find_element_by_tag_name('body').send_keys(Keys.PAGE_DOWN)
+                sleep(0.5)
             
-            # 新しいwindow
-            browser.execute_script("window.open()")
-            browser.switch_to.window(browser.window_handles[-1])
-            browser.get(page_url)
-            wait_browser(browser)
+            # 画像保存のために新しいタブで各画像ページを開く
+            search_result_dom = browser.find_element_by_class_name("search_results")
+            images_dom = search_result_dom.find_elements_by_class_name("item")
 
-            # 画像保存
-            save_image(browser,output_folder_path,search_word)
+            for image_dom in images_dom:
 
-            browser.close()
-            browser.switch_to.window(browser.window_handles[0])
+                if index == int(get_count):
+                    logger.debug("指定件数のデータ取得完了")
+                    break
+
+                safe_search_dom = image_dom.find_elements_by_class_name("nsfw_placeholder")
+                if len(safe_search_dom) > 0:
+                    logger.debug("セーフサーチ画像のためスキップ")
+                    continue
+
+                page_url = image_dom.find_element_by_tag_name("a").get_attribute("href")
+                
+                # 新しいwindow
+                browser.execute_script("window.open()")
+                browser.switch_to.window(browser.window_handles[-1])
+                browser.get(page_url)
+                wait_browser(browser)
+
+                # 画像チェック
+                if not check_image(browser):
+                    browser.close()
+                    browser.switch_to.window(browser.window_handles[0])
+                    continue
+
+
+                # 画像保存
+                save_image(browser,output_folder_path,search_word)
+
+                browser.close()
+                browser.switch_to.window(browser.window_handles[0])
+
+                index += 1
+            
+            # 次のページへ
+            page += 1
+            browser.get(pixabay_base_url + search_word + query_string + "&pagi=" + str(page))
+
+
+
     except Exception:
         logger.error(traceback.format_exc())
+    
+    finally:
+        logger.debug("処理終了")
+        browser.quit()
 
     

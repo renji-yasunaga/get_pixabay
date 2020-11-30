@@ -1,0 +1,15 @@
+src/dist/main.exe
+src/build/main/Analysis-00.toc
+src/build/main/base_library.zip
+src/build/main/EXE-00.toc
+src/build/main/main.exe.manifest
+src/build/main/PKG-00.pkg
+src/build/main/PKG-00.toc
+src/build/main/PYZ-00.pyz
+src/build/main/PYZ-00.toc
+src/build/main/Tree-00.toc
+src/build/main/Tree-01.toc
+src/build/main/warn-main.txt
+src/build/main/xref-main.html
+src/main.spec
+debug.log
